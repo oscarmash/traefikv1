@@ -1,0 +1,178 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: traefik-ingress-controller
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - services
+      - endpoints
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - extensions
+    resources:
+      - ingresses
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+    - extensions
+    resources:
+    - ingresses/status
+    verbs:
+    - update
+
+---
+
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: traefik-ingress-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: traefik-ingress-controller
+subjects:
+  - kind: ServiceAccount
+    name: traefik-ingress-controller
+    namespace: kube-system
+
+---
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traefik-ingress-controller
+  namespace: kube-system
+
+---
+
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: traefik-config
+  namespace: kube-system
+data:
+  traefik.toml: |
+   #defaultEntryPoints = ["http", "https"]
+   defaultEntryPoints = ["http"]
+    [entryPoints]
+        [entryPoints.http]
+        address = ":80"
+        #[entryPoints.http.redirect]
+        #entryPoint = "https"
+        #[entryPoints.https]
+        #address = ":443"
+        #[entryPoints.https.tls]
+        #    [[entryPoints.https.tls.certificates]]
+        #    CertFile = "/ssl/freematica.io.crt"
+        #    KeyFile = "/ssl/freematica.io.key"
+    [kubernetes]
+        [kubernetes.ingressEndpoint]
+        publishedService = "kube-system/traefik-ingress-controller"
+
+---
+
+kind: DaemonSet
+#apiVersion: extensions/v1beta1
+apiVersion: apps/v1
+metadata:
+  name: traefik-ingress-controller
+  namespace: kube-system
+  labels:
+     app: traefik-ingress-controller
+spec:
+  selector:
+    matchLabels:
+      app: traefik-ingress-controller
+      name: traefik-ingress-controller
+  template:
+    metadata:
+     labels:
+       app: traefik-ingress-controller
+       name: traefik-ingress-controller
+    spec:
+        serviceAccountName: traefik-ingress-controller
+        restartPolicy: Always
+        terminationGracePeriodSeconds: 60
+        volumes:
+          - name: config
+            configMap:
+              name: traefik-config
+          #- name: ssl-wildcard-freematica-io
+          #  secret:
+          #    secretName: traefik-cert-freematica-io
+        containers:
+          - name: traefik-ingress-controller
+            image: traefik:v1.7.24-alpine
+            ports:
+            - name: http
+              containerPort: 80
+              hostPort: 80
+            - name: admin
+              containerPort: 8080
+              hostPort: 8080
+            #- name: https
+            #  containerPort: 443
+            #  hostPort: 443
+            resources:
+                limits:
+                  cpu: 200m
+                  memory: 30Mi
+                requests:
+                  cpu: 100m
+                  memory: 20Mi
+            volumeMounts:
+              - mountPath: "/etc/traefik/config"
+                name: config
+              #- mountPath: "/ssl"
+              #  name: ssl-wildcard-freematica-io
+            args:
+            - --configfile=/etc/traefik/config/traefik.toml
+            - --api
+            - --logLevel=DEBUG
+    
+---
+    
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik-ingress-controller
+  namespace: kube-system
+spec:
+  selector:
+    app: traefik-ingress-controller
+  ports:
+    - protocol: TCP
+      name: http
+      port: 80
+    - protocol: TCP
+      name: admin
+      port: 8080
+    #- protocol: TCP
+    #  name: https
+    #  port: 443
+
+---
+
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+    name: traefik-admin-ingress
+    namespace: kube-system
+spec:
+  rules:
+  - host: traefik.ilba.cat
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: traefik-ingress-controller
+          servicePort: 8080
+    
